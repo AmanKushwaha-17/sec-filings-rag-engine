@@ -1,5 +1,6 @@
 import time
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict
 import json
@@ -56,63 +57,68 @@ class APIErrorResponse(BaseModel):
 # -----------------------------------------------------------------------------
 # Global State Management
 # -----------------------------------------------------------------------------
-# We load the heavy ML models exactly ONCE when the server starts.
+def sync_init(app: FastAPI):
+    """Heavy synchronous initialization that runs in a background thread."""
+    try:
+        t0 = time.time()
+        
+        # 1. Load Qdrant Store
+        print("[1] Connecting to Qdrant Cloud Database...")
+        store = QdrantStore()
+        
+        # 2. Load Embedder
+        print("[2] Loading Nvidia Embedder...")
+        embedder = NvidiaEmbedder()
+        dense_retriever = DenseRetriever(embedder=embedder, store=store)
+
+        # 3. Load Sparse Retriever (BM25) & Extract Companies from Index
+        print("[3] Building BM25 Sparse Index in RAM (Downloading from Qdrant)...")
+        chunks = store.get_all_chunks()
+        sparse_retriever = SparseRetriever()
+        sparse_retriever.build_index(chunks)
+        
+        # Build companies list strictly from indexed chunks
+        print("[3b] Extracting active company list from indexed chunks...")
+        companies = {}
+        for c in chunks:
+            t = getattr(c.metadata, "ticker", "")
+            n = getattr(c.metadata, "company_name", "")
+            if t and n:
+                companies[t] = n
+                
+        app.state.companies = [{"ticker": k, "company_name": v} for k, v in companies.items()]
+        app.state.companies.sort(key=lambda x: x["ticker"])
+
+        # 4. Init Hybrid & Reranker
+        print("[4] Loading Reranker Weights...")
+        app.state.hybrid_retriever = HybridRetriever(dense_retriever, sparse_retriever)
+        app.state.reranker = Reranker()
+        
+        # 5. Init Generator & LLM
+        print("[5] Initialising Groq Generator & LLMs...")
+        app.state.generator = RAGGenerator()
+        app.state.query_analyzer = QueryAnalyzer()
+        
+        app.state.ready = True
+        print(f"COLD START COMPLETE in {time.time() - t0:.2f} seconds!")
+        print("="*80)
+        
+    except Exception as e:
+        print(f"CRITICAL ERROR during initialization: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ready = False
     app.state.companies = []
     
     print("="*80)
-    print("INITIALISING ML MODELS (COLD START)...")
+    print("INITIALISING ML MODELS IN BACKGROUND THREAD...")
     print("="*80)
     
-    t0 = time.time()
-    
-    # 0. Load Companies
-    print("[0] Scanning filings to build company list...")
-    filings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), settings.filings_dir)
-    for filepath in glob.glob(os.path.join(filings_path, "*.json")):
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if "ticker" in data and "company_name" in data:
-                    app.state.companies.append({
-                        "ticker": data["ticker"].strip().upper(),
-                        "company_name": data["company_name"].strip()
-                    })
-        except Exception as e:
-            print(f"Warning: Failed to load company from {filepath}: {e}")
-            
-    # Sort companies alphabetically by ticker
-    app.state.companies.sort(key=lambda x: x["ticker"])
-    
-    # 1. Load Qdrant Store
-    print("[1] Connecting to Qdrant Cloud Database...")
-    store = QdrantStore()
-    
-    # 2. Load Embedder
-    print("[2] Loading Nvidia Embedder...")
-    embedder = NvidiaEmbedder()
-    dense_retriever = DenseRetriever(embedder=embedder, store=store)
-
-    # 3. Load Sparse Retriever (BM25)
-    print("[3] Building BM25 Sparse Index in RAM (Downloading from Qdrant)...")
-    chunks = store.get_all_chunks()
-    sparse_retriever = SparseRetriever()
-    sparse_retriever.build_index(chunks)
-
-    # 4. Init Hybrid & Reranker
-    print("[4] Loading Reranker Weights...")
-    app.state.hybrid_retriever = HybridRetriever(dense_retriever, sparse_retriever)
-    app.state.reranker = Reranker()
-    
-    print("[5] Initialising Groq Generator & LLMs...")
-    app.state.generator = RAGGenerator()
-    app.state.query_analyzer = QueryAnalyzer()
-    
-    app.state.ready = True
-    print(f"COLD START COMPLETE in {time.time() - t0:.2f} seconds!")
-    print("="*80)
+    # Launch heavy initialization in a background thread so FastAPI can start serving immediately
+    thread = threading.Thread(target=sync_init, args=(app,))
+    thread.daemon = True
+    thread.start()
     
     yield
     
@@ -135,13 +141,25 @@ app.add_middleware(
 # -----------------------------------------------------------------------------
 # API Endpoints
 # -----------------------------------------------------------------------------
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=APIErrorResponse(
+            code="HTTP_ERROR",
+            message=exc.detail,
+            retryable=True
+        ).model_dump()
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    print(f"INTERNAL ERROR: {exc}") # Log raw error for backend debugging
     return JSONResponse(
         status_code=500,
         content=APIErrorResponse(
             code="INTERNAL_ERROR",
-            message=str(exc),
+            message="An unexpected internal error occurred. Please try again later.",
             retryable=True
         ).model_dump()
     )
@@ -158,6 +176,12 @@ async def companies_endpoint():
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
+    if not getattr(app.state, "ready", False):
+        raise HTTPException(
+            status_code=503, 
+            detail="AI models are currently warming up. Please try again in a few seconds."
+        )
+        
     try:
         t0 = time.time()
         
