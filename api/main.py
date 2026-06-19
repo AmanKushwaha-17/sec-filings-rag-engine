@@ -233,8 +233,8 @@ async def chat_endpoint(request: ChatRequest):
 # -----------------------------------------------------------------------------
 # Mount Frontend
 # -----------------------------------------------------------------------------
-frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
-# Create the frontend/dist directory if it doesn't exist yet to prevent startup crashes
+frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend_2", "dist")
+# Create the frontend_2/dist directory if it doesn't exist yet to prevent startup crashes
 os.makedirs(frontend_path, exist_ok=True)
 
 # Note: We mount the "dist" directory which contains the built Vite output.
