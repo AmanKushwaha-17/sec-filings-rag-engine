@@ -47,20 +47,31 @@ class Reranker:
     ) -> None:
         self._model_name = model_name
 
-        if not _HAS_NVIDIA or not settings.nvidia_api_key:
-            logger.warning("NVIDIA SDK not installed or missing API key. Reranker will act as a pass-through.")
-            self._model = None
+        if not _HAS_NVIDIA or not settings.nvidia_api_keys:
+            logger.warning("NVIDIA SDK not installed or missing API keys. Reranker will act as a pass-through.")
+            self.models = []
+            return
+
+        self.api_keys = [k.strip() for k in settings.nvidia_api_keys.split(",") if k.strip()]
+        if not self.api_keys:
+            logger.warning("No valid API keys found. Reranker will act as a pass-through.")
+            self.models = []
             return
 
         logger.info(
-            "Loading NVIDIA NIM reranker '%s'...",
-            self._model_name
+            "Loading NVIDIA NIM reranker '%s' with %d keys...",
+            self._model_name,
+            len(self.api_keys)
         )
 
-        self._model = NVIDIARerank(
-            model=self._model_name,
-            nvidia_api_key=settings.nvidia_api_key
-        )
+        self.models = [
+            NVIDIARerank(
+                model=self._model_name,
+                nvidia_api_key=key,
+                top_n=settings.rerank_top_n
+            ) for key in self.api_keys
+        ]
+        self.current_key_idx = 0
 
         logger.info("NVIDIA Reranker ready | model=%s", self._model_name)
 
@@ -75,7 +86,7 @@ class Reranker:
         if not results:
             return []
 
-        if self._model is None:
+        if not self.models:
             logger.debug("Reranker pass-through mode active.")
             return results[:n]
 
@@ -89,13 +100,28 @@ class Reranker:
         ]
 
         # Call NVIDIA NIM API
-        try:
-            reranked_docs = self._model.compress_documents(
-                documents=docs,
-                query=query
-            )
-        except Exception as e:
-            logger.error(f"NVIDIA Reranker failed: {e}. Falling back to hybrid results.")
+        for attempt in range(len(self.api_keys)):
+            try:
+                model = self.models[self.current_key_idx]
+                if hasattr(model, "top_n"):
+                    model.top_n = n
+                    
+                reranked_docs = model.compress_documents(
+                    documents=docs,
+                    query=query
+                )
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "429" in err_msg or "rate limit" in err_msg or "rate_limit_exceeded" in err_msg:
+                    logger.warning(f"NVIDIA Reranker Key {self.current_key_idx+1} hit rate limit. Trying next key...")
+                    self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+                    continue
+                else:
+                    logger.error(f"NVIDIA Reranker failed: {e}. Falling back to hybrid results.")
+                    return results[:n]
+        else:
+            logger.error("All NVIDIA API keys hit rate limits. Falling back to hybrid results.")
             return results[:n]
 
         # Rebuild QueryResult list from the returned sorted documents

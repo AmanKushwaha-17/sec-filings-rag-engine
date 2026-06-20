@@ -11,5 +11,5 @@ services:
         sync: false
       - key: QDRANT_API_KEY
         sync: false
-      - key: NVIDIA_API_KEY
+      - key: NVIDIA_API_KEYS
         sync: false

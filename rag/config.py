@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     embedding_model: str = "nvidia/nv-embedqa-e5-v5"
     embedding_dim: int = 1024
     embedding_device: str = "cpu"
-    nvidia_api_key: str = ""                    # REQUIRED — must be in .env
+    nvidia_api_keys: str = ""                   # REQUIRED — comma separated keys
 
 
 

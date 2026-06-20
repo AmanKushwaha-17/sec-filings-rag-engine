@@ -8,7 +8,7 @@ At its core, this engine implements an LLM-driven Query Analyzer for metadata pr
 
 ## 🚀 Live Demo
 
-- **Frontend UI:** Hosted on Vercel (connects automatically to the backend)
+- **Frontend UI:** [https://sec-filings-rag-engine.vercel.app/](https://sec-filings-rag-engine.vercel.app/)
 - **Backend API:** Hosted on Render (`https://sec-filings-rag-engine.onrender.com/api/health` to check status)
 
 ---
