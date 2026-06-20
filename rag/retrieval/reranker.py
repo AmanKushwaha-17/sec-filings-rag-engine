@@ -47,12 +47,14 @@ class Reranker:
     ) -> None:
         self._model_name = model_name
 
-        if not _HAS_NVIDIA or not settings.nvidia_api_keys:
+        keys_str = settings.nvidia_api_keys or settings.nvidia_api_key
+        
+        if not _HAS_NVIDIA or not keys_str:
             logger.warning("NVIDIA SDK not installed or missing API keys. Reranker will act as a pass-through.")
             self.models = []
             return
 
-        self.api_keys = [k.strip() for k in settings.nvidia_api_keys.split(",") if k.strip()]
+        self.api_keys = [k.strip() for k in keys_str.split(",") if k.strip()]
         if not self.api_keys:
             logger.warning("No valid API keys found. Reranker will act as a pass-through.")
             self.models = []

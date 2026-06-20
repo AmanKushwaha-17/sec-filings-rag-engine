@@ -64,7 +64,8 @@ class NvidiaEmbedder(BaseEmbedder):
         if api_keys:
             self.api_keys = api_keys
         else:
-            self.api_keys = [k.strip() for k in settings.nvidia_api_keys.split(",") if k.strip()]
+            keys_str = settings.nvidia_api_keys or settings.nvidia_api_key
+            self.api_keys = [k.strip() for k in keys_str.split(",") if k.strip()]
             
         if not self.api_keys:
             raise ValueError("No valid NVIDIA API keys found.")

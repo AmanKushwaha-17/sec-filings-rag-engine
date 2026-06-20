@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     embedding_dim: int = 1024
     embedding_device: str = "cpu"
     nvidia_api_keys: str = ""                   # REQUIRED — comma separated keys
+    nvidia_api_key: str = ""                    # Fallback if old env var is used
 
 
 
