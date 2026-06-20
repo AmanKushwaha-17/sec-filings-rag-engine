@@ -144,6 +144,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 @app.get("/api/health")
+@app.head("/api/health")
 async def health_endpoint():
     if getattr(app.state, "ready", False):
         return {"status": "API ready"}
