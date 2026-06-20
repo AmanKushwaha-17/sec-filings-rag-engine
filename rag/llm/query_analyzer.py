@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
 
@@ -8,9 +8,9 @@ from rag.config import settings
 logger = logging.getLogger(__name__)
 
 class QueryFilter(BaseModel):
-    ticker: Optional[str] = Field(
+    tickers: Optional[List[str]] = Field(
         default=None, 
-        description="The stock ticker symbol of the company mentioned in the query, if any (e.g., 'NVDA', 'AAPL', 'MSFT'). Must be uppercase. If no specific company is mentioned, leave null."
+        description="A list of stock ticker symbols of the companies mentioned in the query, if any (e.g., ['NVDA', 'AAPL', 'MSFT']). Must be uppercase. If no specific company is mentioned, leave null."
     )
 
 class QueryAnalyzer:
@@ -26,15 +26,16 @@ class QueryAnalyzer:
     def analyze(self, query: str) -> Optional[dict]:
         """
         Analyzes the query and extracts metadata filters.
-        Returns a dict e.g., {"ticker": "NVDA"} or None.
+        Returns a dict e.g., {"ticker": ["NVDA", "AVGO"]} or None.
         """
         logger.info(f"Analyzing query for metadata filters: '{query}'")
         
         system_prompt = """You are a financial query analyzer. 
-        Your job is to extract the stock ticker symbol of the company mentioned in the user's question.
-        If the user asks about a specific company (e.g., 'What does NVDA say...'), return 'NVDA'.
-        If the user asks a general question about multiple companies (e.g., 'Summarize supply chain risks'), return null.
-        Always return the ticker in uppercase."""
+        Your job is to extract a list of all stock ticker symbols of the companies mentioned in the user's question.
+        If the user asks about a specific company (e.g., 'What does NVDA say...'), return ['NVDA'].
+        If the user asks to compare multiple companies (e.g., 'Compare NVDA and AVGO...'), return ['NVDA', 'AVGO'].
+        If the user asks a general question without specifying companies (e.g., 'Summarize supply chain risks'), return null.
+        Always return the tickers in uppercase."""
         
         for i, api_key in enumerate(self.api_keys):
             try:
@@ -50,9 +51,9 @@ class QueryAnalyzer:
                     ("human", query)
                 ])
                 
-                if result and result.ticker:
-                    logger.info(f"Extracted filter: ticker={result.ticker}")
-                    return {"ticker": result.ticker}
+                if result and result.tickers:
+                    logger.info(f"Extracted filter: tickers={result.tickers}")
+                    return {"ticker": result.tickers}
                 
                 return None
                 
