@@ -36,7 +36,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from sentence_transformers import CrossEncoder
+try:
+    from sentence_transformers import CrossEncoder
+    _HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    _HAS_SENTENCE_TRANSFORMERS = False
 
 from rag.config import settings
 from rag.vectorstore.qdrant_store import QueryResult
@@ -67,6 +71,11 @@ class Reranker:
     ) -> None:
         self._model_name = model_name
         self._device     = device or settings.embedding_device
+
+        if not _HAS_SENTENCE_TRANSFORMERS:
+            logger.warning("sentence-transformers not installed. Reranker will act as a pass-through.")
+            self._model = None
+            return
 
         logger.info(
             "Loading cross-encoder '%s' on device='%s'...",
@@ -114,6 +123,11 @@ class Reranker:
         if not results:
             logger.warning("rerank() called with empty results — returning []")
             return []
+
+        if self._model is None:
+            # Fallback to pure hybrid ranking if no cross-encoder is loaded
+            logger.debug("Reranker pass-through mode active.")
+            return results[:n]
 
         # Build (query, chunk_text) pairs for cross-encoder
         pairs = [(query, r.text) for r in results]
