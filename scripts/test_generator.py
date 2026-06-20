@@ -54,9 +54,7 @@ def main():
     queries = [
         "Which of the 33 companies disclosed highest China export restriction exposure?",
         "Summarise top 5 supply chain risks appearing across majority of companies",
-        "What does NVDA say about TSMC manufacturing dependency?",
-        "Which companies mention AI inference as growth driver vs risk?",
-        "What is WOLF's exact FY2026 revenue guidance?"
+
     ]
 
     for query in queries:

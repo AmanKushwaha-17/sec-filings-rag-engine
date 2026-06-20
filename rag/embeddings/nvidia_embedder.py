@@ -58,17 +58,20 @@ class NvidiaEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_keys: Optional[list[str]] = None,
         batch_size: int = _BATCH_SIZE,
     ) -> None:
-        self._api_key    = api_key or settings.nvidia_api_key
+        if api_keys:
+            self.api_keys = api_keys
+        else:
+            self.api_keys = [k.strip() for k in settings.nvidia_api_keys.split(",") if k.strip()]
+            
+        if not self.api_keys:
+            raise ValueError("No valid NVIDIA API keys found.")
+            
+        self.current_key_idx = 0
         self._batch_size = batch_size
         self._dim        = 1024
-
-        self._headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
 
         # Quick connectivity check
         self._ping()
@@ -89,7 +92,7 @@ class NvidiaEmbedder(BaseEmbedder):
         except Exception as exc:
             raise RuntimeError(
                 f"NVIDIA NIM API connectivity check failed: {exc}\n"
-                "Check your NVIDIA_API_KEY in .env"
+                "Check your NVIDIA_API_KEYS in .env"
             )
 
     def _call_api(
@@ -114,12 +117,20 @@ class NvidiaEmbedder(BaseEmbedder):
             "input": texts,
             "input_type": input_type,
         }
+        
+        max_attempts = max(retries, len(self.api_keys) * 2)
 
-        for attempt in range(retries):
+        for attempt in range(max_attempts):
+            current_key = self.api_keys[self.current_key_idx]
+            headers = {
+                "Authorization": f"Bearer {current_key}",
+                "Content-Type": "application/json",
+            }
+            
             try:
                 response = requests.post(
                     _API_URL,
-                    headers=self._headers,
+                    headers=headers,
                     json=payload,
                     timeout=60,
                 )
@@ -131,25 +142,26 @@ class NvidiaEmbedder(BaseEmbedder):
                     return [item["embedding"] for item in items]
 
                 elif response.status_code == 429:
-                    # Rate limited — wait and retry
+                    # Rate limited — wait and retry with next key
                     wait = 2 ** attempt
                     logger.warning(
-                        "Rate limited (429). Waiting %ds before retry %d/%d...",
-                        wait, attempt + 1, retries,
+                        "Rate limited (429). Waiting %ds before retry %d/%d. Switching API key...",
+                        wait, attempt + 1, max_attempts,
                     )
+                    self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
                     time.sleep(wait)
 
                 else:
-                    raise RuntimeError(
-                        f"NVIDIA API error {response.status_code}: {response.text}"
-                    )
+                    logger.warning(f"NVIDIA API error {response.status_code}: {response.text}")
+                    self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+                    time.sleep(1)
 
             except requests.exceptions.Timeout:
-                logger.warning("Request timeout on attempt %d/%d", attempt + 1, retries)
-                if attempt == retries - 1:
+                logger.warning("Request timeout on attempt %d/%d", attempt + 1, max_attempts)
+                if attempt == max_attempts - 1:
                     raise
 
-        raise RuntimeError(f"NVIDIA API failed after {retries} retries.")
+        raise RuntimeError(f"NVIDIA API failed after {max_attempts} retries.")
 
     # -----------------------------------------------------------------------
     # BaseEmbedder interface
