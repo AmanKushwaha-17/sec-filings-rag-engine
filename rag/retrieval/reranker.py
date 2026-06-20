@@ -1,34 +1,13 @@
 """
 rag/retrieval/reranker.py
 ==========================
-Cross-encoder reranker: re-scores the top candidates from hybrid
-retrieval and selects the most relevant chunks for the LLM.
+Cross-encoder reranker using NVIDIA NIM API.
 
-Why rerank?
-  Bi-encoders (FAISS + BM25) embed query and chunks independently.
-  A cross-encoder reads query + chunk TOGETHER, producing a much more
-  accurate relevance score — but is too slow to run on all 4,873 chunks.
+This completely replaces the local HuggingFace `sentence-transformers` model
+with a lightweight API call to NVIDIA, meaning this runs with almost zero
+RAM usage and easily fits within Render's 512MB free tier limit.
 
-  Two-stage pipeline:
-    Stage 1 (fast): hybrid retrieval → top 30 candidates  (~100ms)
-    Stage 2 (precise): cross-encoder → re-score 30, keep 5 (~500ms)
-
-Model: cross-encoder/ms-marco-MiniLM-L-6-v2
-  - Size:     22 MB (tiny, CPU-friendly)
-  - Training: MS MARCO passage ranking benchmark
-  - Output:   Raw logit score (higher = more relevant)
-  - Latency:  ~500ms for 30 pairs on CPU
-
-Usage:
-    from rag.retrieval.reranker import Reranker
-
-    reranker = Reranker()
-    reranked = reranker.rerank(
-        query="NVDA supply chain risks",
-        results=hybrid_results,   # list of QueryResult (top 30)
-        top_n=5,
-    )
-    # reranked → top 5 most relevant chunks, ready for LLM
+Model: nvidia/nv-rerankqa-mistral-4b-v3
 """
 
 from __future__ import annotations
@@ -36,19 +15,21 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from langchain_core.documents import Document
+
 try:
-    from sentence_transformers import CrossEncoder
-    _HAS_SENTENCE_TRANSFORMERS = True
+    from langchain_nvidia_ai_endpoints import NVIDIARerank
+    _HAS_NVIDIA = True
 except ImportError:
-    _HAS_SENTENCE_TRANSFORMERS = False
+    _HAS_NVIDIA = False
 
 from rag.config import settings
 from rag.vectorstore.qdrant_store import QueryResult
 
 logger = logging.getLogger(__name__)
 
-# Cross-encoder model — 22MB, fast on CPU, trained on MS MARCO
-_DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# Cloud-hosted NVIDIA NIM reranking model
+_DEFAULT_MODEL = "nvidia/llama-nemotron-rerank-1b-v2"
 
 
 class Reranker:
@@ -56,12 +37,7 @@ class Reranker:
     Cross-encoder reranker for the final retrieval stage.
 
     Takes the top-N candidates from hybrid retrieval and re-scores
-    each (query, chunk) pair with a cross-encoder, which reads both
-    the query and the chunk text together for much higher accuracy.
-
-    Args:
-        model_name: HuggingFace cross-encoder model ID.
-        device:     Torch device ("cpu", "cuda", "mps").
+    each (query, chunk) pair using NVIDIA's cloud NIM API.
     """
 
     def __init__(
@@ -70,26 +46,23 @@ class Reranker:
         device: Optional[str] = None,
     ) -> None:
         self._model_name = model_name
-        self._device     = device or settings.embedding_device
 
-        if not _HAS_SENTENCE_TRANSFORMERS:
-            logger.warning("sentence-transformers not installed. Reranker will act as a pass-through.")
+        if not _HAS_NVIDIA or not settings.nvidia_api_key:
+            logger.warning("NVIDIA SDK not installed or missing API key. Reranker will act as a pass-through.")
             self._model = None
             return
 
         logger.info(
-            "Loading cross-encoder '%s' on device='%s'...",
-            self._model_name,
-            self._device,
+            "Loading NVIDIA NIM reranker '%s'...",
+            self._model_name
         )
 
-        self._model = CrossEncoder(
-            self._model_name,
-            device=self._device,
-            max_length=512,  # cross-encoders have shorter context than bi-encoders
+        self._model = NVIDIARerank(
+            model=self._model_name,
+            nvidia_api_key=settings.nvidia_api_key
         )
 
-        logger.info("Reranker ready | model=%s", self._model_name)
+        logger.info("NVIDIA Reranker ready | model=%s", self._model_name)
 
     def rerank(
         self,
@@ -97,73 +70,52 @@ class Reranker:
         results: list[QueryResult],
         top_n: Optional[int] = None,
     ) -> list[QueryResult]:
-        """
-        Re-score a list of QueryResult objects using the cross-encoder.
-
-        Args:
-            query:   Original user query string.
-            results: Candidate chunks from hybrid retrieval (typically 20-30).
-            top_n:   Number of results to return after reranking.
-                     Defaults to settings.rerank_top_n (5).
-
-        Returns:
-            Top top_n QueryResult objects sorted by cross-encoder score
-            (most relevant first). Scores are replaced with the
-            cross-encoder's logit output (higher = more relevant).
-
-        Example:
-            >>> reranked = reranker.rerank("NVDA risks", hybrid_results, top_n=5)
-            >>> len(reranked)
-            5
-            >>> reranked[0].score  # cross-encoder logit
-            8.742
-        """
         n = top_n or settings.rerank_top_n
 
         if not results:
-            logger.warning("rerank() called with empty results — returning []")
             return []
 
         if self._model is None:
-            # Fallback to pure hybrid ranking if no cross-encoder is loaded
             logger.debug("Reranker pass-through mode active.")
             return results[:n]
 
-        # Build (query, chunk_text) pairs for cross-encoder
-        pairs = [(query, r.text) for r in results]
-
-        # Batch-score all pairs
-        # CrossEncoder.predict() returns a numpy array of raw logit scores
-        scores = self._model.predict(
-            pairs,
-            batch_size=32,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        )
-
-        # Attach scores to results and sort descending
-        scored: list[tuple[float, QueryResult]] = [
-            (float(score), result)
-            for score, result in zip(scores, results)
+        # Convert to LangChain Documents for the NVIDIARerank interface
+        docs = [
+            Document(
+                page_content=r.text,
+                metadata={"original_result": r}
+            )
+            for r in results
         ]
-        scored.sort(key=lambda x: x[0], reverse=True)
 
-        # Rebuild QueryResult with updated scores
+        # Call NVIDIA NIM API
+        try:
+            reranked_docs = self._model.compress_documents(
+                documents=docs,
+                query=query
+            )
+        except Exception as e:
+            logger.error(f"NVIDIA Reranker failed: {e}. Falling back to hybrid results.")
+            return results[:n]
+
+        # Rebuild QueryResult list from the returned sorted documents
         reranked: list[QueryResult] = []
-        for score, result in scored[:n]:
+        for doc in reranked_docs[:n]:
+            orig: QueryResult = doc.metadata["original_result"]
+            score = doc.metadata.get("relevance_score", 0.0)
+            
             reranked.append(QueryResult(
-                chunk_id=result.chunk_id,
-                text=result.text,
-                metadata=result.metadata,
-                score=score,
+                chunk_id=orig.chunk_id,
+                text=orig.text,
+                metadata=orig.metadata,
+                score=float(score),
             ))
 
         logger.debug(
-            "Reranker | input=%d | output=%d | top score=%.3f | bottom score=%.3f",
+            "NVIDIA Reranker | input=%d | output=%d | top score=%.3f",
             len(results),
             len(reranked),
             reranked[0].score if reranked else 0,
-            reranked[-1].score if reranked else 0,
         )
 
         return reranked
