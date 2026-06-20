@@ -23,6 +23,15 @@ class QueryAnalyzer:
             raise ValueError("GROQ_API_KEYS is not set in .env")
         self.api_keys = [k.strip() for k in settings.groq_api_keys.split(",") if k.strip()]
         
+        self.llm_clients = [
+            ChatGroq(
+                api_key=key,
+                model=settings.groq_model,
+                temperature=0
+            ).with_structured_output(QueryFilter) for key in self.api_keys
+        ]
+        self.current_key_idx = 0
+        
     def analyze(self, query: str) -> Optional[dict]:
         """
         Analyzes the query and extracts metadata filters.
@@ -37,14 +46,9 @@ class QueryAnalyzer:
         If the user asks a general question without specifying companies (e.g., 'Summarize supply chain risks'), return null.
         Always return the tickers in uppercase."""
         
-        for i, api_key in enumerate(self.api_keys):
+        for attempt in range(len(self.api_keys)):
             try:
-                llm = ChatGroq(
-                    api_key=api_key,
-                    model=settings.groq_model,
-                    temperature=0
-                )
-                analyzer = llm.with_structured_output(QueryFilter)
+                analyzer = self.llm_clients[self.current_key_idx]
                 
                 result = analyzer.invoke([
                     ("system", system_prompt),
@@ -60,7 +64,8 @@ class QueryAnalyzer:
             except Exception as e:
                 err_msg = str(e).lower()
                 if "429" in err_msg or "rate limit" in err_msg or "rate_limit_exceeded" in err_msg:
-                    logger.warning(f"QueryAnalyzer: Key {i+1} hit rate limit. Trying next key...")
+                    logger.warning(f"QueryAnalyzer: Key {self.current_key_idx+1} hit rate limit. Trying next key...")
+                    self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
                     continue
                 logger.error(f"Error in QueryAnalyzer: {e}")
                 return None

@@ -28,14 +28,6 @@ class Settings(BaseSettings):
       - raises a clear error if a required secret is missing
     """
 
-    # ------------------------------------------------------------------
-    # Groq (LLM Generation)
-    # ------------------------------------------------------------------
-    groq_api_keys: str = ""                      # REQUIRED
-    groq_model: str = "llama-3.3-70b-versatile"
-    groq_temperature: float = 0.1
-    groq_max_tokens: int = 2048
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

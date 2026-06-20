@@ -29,6 +29,15 @@ class RAGGenerator:
             raise ValueError("No valid keys found in GROQ_API_KEYS")
             
         self.prompt = get_rag_prompt()
+        self.llm_clients = [
+            ChatGroq(
+                api_key=key,
+                model=settings.groq_model,
+                temperature=settings.groq_temperature,
+                max_tokens=settings.groq_max_tokens,
+            ) for key in self.api_keys
+        ]
+        self.current_key_idx = 0
         logger.info(f"RAGGenerator initialized with {len(self.api_keys)} keys for model: {settings.groq_model}")
 
     def generate_answer(self, query: str, contexts: List[QueryResult]) -> str:
@@ -41,15 +50,9 @@ class RAGGenerator:
         logger.info(f"Generating answer for query: '{query}'")
         
         last_error = None
-        for i, api_key in enumerate(self.api_keys):
+        for attempt in range(len(self.api_keys)):
             try:
-                # Initialize LLM dynamically for each key attempt
-                llm = ChatGroq(
-                    api_key=api_key,
-                    model=settings.groq_model,
-                    temperature=settings.groq_temperature,
-                    max_tokens=settings.groq_max_tokens,
-                )
+                llm = self.llm_clients[self.current_key_idx]
                 chain = self.prompt | llm | StrOutputParser()
                 
                 response = chain.invoke({
@@ -64,7 +67,8 @@ class RAGGenerator:
                 
                 # Check if it is a rate limit error (HTTP 429)
                 if "429" in err_msg or "rate limit" in err_msg or "rate_limit_exceeded" in err_msg:
-                    logger.warning(f"Key {i+1}/{len(self.api_keys)} hit rate limit. Trying next key...")
+                    logger.warning(f"Key {self.current_key_idx+1}/{len(self.api_keys)} hit rate limit. Trying next key...")
+                    self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
                     continue
                 else:
                     # If it's a different error, just fail immediately
