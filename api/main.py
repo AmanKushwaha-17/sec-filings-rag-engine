@@ -4,6 +4,14 @@ import threading
 from contextlib import asynccontextmanager
 from typing import List, Optional
 import json
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -61,19 +69,19 @@ def sync_init(app: FastAPI):
     try:
         t0 = time.time()
 
-        print("[1] Connecting to Qdrant Cloud Database...")
+        logger.info("[1] Connecting to Qdrant Cloud Database...")
         store = QdrantStore()
 
-        print("[2] Loading Nvidia Embedder...")
+        logger.info("[2] Loading Nvidia Embedder...")
         embedder = NvidiaEmbedder()
         dense_retriever = DenseRetriever(embedder=embedder, store=store)
 
-        print("[3] Building BM25 Sparse Index in RAM (Downloading from Qdrant)...")
+        logger.info("[3] Building BM25 Sparse Index in RAM (Downloading from Qdrant)...")
         chunks = store.get_all_chunks()
         sparse_retriever = SparseRetriever()
         sparse_retriever.build_index(chunks)
 
-        print("[3b] Extracting active company list from indexed chunks...")
+        logger.info("[3b] Extracting active company list from indexed chunks...")
         companies = {}
         for c in chunks:
             t = getattr(c.metadata, "ticker", "")
@@ -84,33 +92,33 @@ def sync_init(app: FastAPI):
         app.state.companies = [{"ticker": k, "company_name": v} for k, v in companies.items()]
         app.state.companies.sort(key=lambda x: x["ticker"])
 
-        print("[4] Loading Reranker Weights...")
+        logger.info("[4] Loading Reranker Weights...")
         app.state.hybrid_retriever = HybridRetriever(dense_retriever, sparse_retriever)
         app.state.reranker = Reranker()
 
-        print("[5] Initialising Groq Generator & LLMs...")
+        logger.info("[5] Initialising Groq Generator & LLMs...")
         app.state.generator = RAGGenerator()
         app.state.query_analyzer = QueryAnalyzer()
 
         app.state.ready = True
-        print(f"COLD START COMPLETE in {time.time() - t0:.2f} seconds!")
-        print("=" * 80)
+        logger.info(f"COLD START COMPLETE in {time.time() - t0:.2f} seconds!")
+        logger.info("=" * 80)
 
     except Exception as e:
-        print(f"CRITICAL ERROR during initialization: {e}")
+        logger.exception("CRITICAL ERROR during initialization:")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ready = False
     app.state.companies = []
-    print("=" * 80)
-    print("INITIALISING ML MODELS IN BACKGROUND THREAD...")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info("INITIALISING ML MODELS IN BACKGROUND THREAD...")
+    logger.info("=" * 80)
     thread = threading.Thread(target=sync_init, args=(app,))
     thread.daemon = True
     thread.start()
     yield
-    print("Shutting down ML models...")
+    logger.info("Shutting down ML models...")
 
 # -----------------------------------------------------------------------------
 app = FastAPI(lifespan=lifespan, title="Company SEC RAG API")
@@ -133,7 +141,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"INTERNAL ERROR: {exc}")
+    logger.exception(f"Unhandled internal error during request to {request.url.path}")
     return JSONResponse(
         status_code=500,
         content=APIErrorResponse(
@@ -213,7 +221,7 @@ async def chat_endpoint(request: ChatRequest):
         )
 
     except Exception as e:
-        print(f"Error during generation: {e}")
+        logger.exception(f"Error during generation for query: '{request.query}'")
         raise
 
 # End of API definitions.
