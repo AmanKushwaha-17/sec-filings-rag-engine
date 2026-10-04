@@ -158,6 +158,20 @@ async def health_endpoint():
         return {"status": "API ready"}
     return {"status": "model cold start in progress"}
 
+@app.get("/api/ping-qdrant")
+@app.head("/api/ping-qdrant")
+async def ping_qdrant_endpoint():
+    """Proxy endpoint to ping Qdrant Cloud from Uptime services securely."""
+    import httpx
+    url = f"{settings.qdrant_url}/collections"
+    headers = {"api-key": settings.qdrant_api_key}
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.head(url, headers=headers, timeout=5.0)
+            return {"status": "ok", "qdrant_status": response.status_code}
+        except Exception as e:
+            return {"status": "error", "details": str(e)}
+
 @app.get("/api/companies")
 async def companies_endpoint():
     return getattr(app.state, "companies", [])

@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # NVIDIA NIM  (API-based embeddings)
     # ------------------------------------------------------------------
-    embedding_model: str = "nvidia/nv-embedqa-e5-v5"
-    embedding_dim: int = 1024
+    embedding_model: str = "nvidia/nemotron-3-embed-1b"
+    embedding_dim: int = 2048
     embedding_device: str = "cpu"
     nvidia_api_keys: str = ""                   # REQUIRED — comma separated keys
     nvidia_api_key: str = ""                    # Fallback if old env var is used
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     qdrant_url: str = ""                        # REQUIRED — must be in .env
     qdrant_api_key: str = ""                    # REQUIRED — must be in .env
-    qdrant_collection_name: str = "sec_10k_chunks"
+    qdrant_collection_name: str = "sec_10k_chunks_nemotron"
 
     # ------------------------------------------------------------------
     # Retrieval
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # LLM  (Groq — ultra-fast inference)
     # ------------------------------------------------------------------
     groq_api_keys: str                           # REQUIRED — must be in .env
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
     groq_temperature: float = 0.1
     groq_max_tokens: int = 2048
 

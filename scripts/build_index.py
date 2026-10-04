@@ -109,9 +109,9 @@ def main():
     # STEP 3 — Embed via NVIDIA NIM
     # -----------------------------------------------------------------------
     sep("STEP 3: Embedding chunks via NVIDIA NIM API")
-    print(f"  Model  : nvidia/nv-embedqa-e5-v5")
+    print(f"  Model  : {settings.embedding_model}")
     print(f"  Chunks : {len(all_chunks):,}")
-    print(f"  Dim    : 1024")
+    print(f"  Dim    : {settings.embedding_dim}")
     print("  (API-based — no GPU needed)\n")
 
     from rag.embeddings.nvidia_embedder import NvidiaEmbedder

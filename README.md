@@ -32,7 +32,7 @@ At its core, this engine implements an LLM-driven Query Analyzer for metadata pr
 │                    3-STAGE RETRIEVAL PIPELINE                     │
 │                                                                  │
 │  Stage 1a: Dense Retriever (Qdrant Cloud)                        │
-│       → Nvidia NIM Embeddings (nvidia/nv-embedqa-e5-v5)          │
+│       → Nvidia NIM Embeddings (nvidia/nemotron-3-embed-1b)       │
 │       → Returns top-40 semantically similar chunks               │
 │                                                                  │
 │  Stage 1b: Sparse Retriever (BM25)                               │
@@ -65,8 +65,8 @@ At its core, this engine implements an LLM-driven Query Analyzer for metadata pr
 |-----------|-----------|-----------------|
 | **Frontend UI** | React + Vite | Blazing fast local development, deployed globally on Vercel. Features a split-pane layout for inspecting citations. |
 | **Backend API** | FastAPI | High-performance Python async framework, deployed on Render. |
-| **LLM Inference** | Groq (`llama-3.3-70b-versatile`) | Ultra-fast LPU inference enabling both Query Analysis and Generation to run in under ~2 seconds. |
-| **Embeddings** | Nvidia NIM (`nv-embedqa-e5-v5`) | Cloud-hosted state-of-the-art embedding model preventing local OOM crashes. |
+| **LLM Inference** | Groq (`openai/gpt-oss-120b`) | Ultra-fast LPU inference enabling both Query Analysis and Generation to run in under ~2 seconds. |
+| **Embeddings** | Nvidia NIM (`nemotron-3-embed-1b`) | Cloud-hosted state-of-the-art embedding model preventing local OOM crashes. |
 | **Reranker** | Nvidia NIM (`llama-nemotron-rerank-1b-v2`) | Cloud-hosted cross-encoder for high-accuracy semantic ranking. |
 | **Vector Store** | Qdrant Cloud | Stores vectors + metadata payload natively. Supports complex nested metadata pre-filtering. |
 | **Sparse Retrieval**| `rank-bm25` | Industry-standard keyword ranking to complement dense retrieval. |

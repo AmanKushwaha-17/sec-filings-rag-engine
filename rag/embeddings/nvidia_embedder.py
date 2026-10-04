@@ -40,13 +40,13 @@ from rag.ingestion.models import Chunk
 logger = logging.getLogger(__name__)
 
 _API_URL    = "https://integrate.api.nvidia.com/v1/embeddings"
-_MODEL      = "nvidia/nv-embedqa-e5-v5"
+_MODEL      = settings.embedding_model
 _BATCH_SIZE = 96   # NVIDIA NIM handles large batches well
 
 
 class NvidiaEmbedder(BaseEmbedder):
     """
-    NVIDIA NIM API embedder — nv-embedqa-e5-v5.
+    NVIDIA NIM API embedder.
 
     Implements BaseEmbedder so it can be swapped in anywhere
     SentenceTransformerEmbedder is used with zero other changes.
@@ -60,6 +60,7 @@ class NvidiaEmbedder(BaseEmbedder):
         self,
         api_keys: Optional[list[str]] = None,
         batch_size: int = _BATCH_SIZE,
+        dim: Optional[int] = None,
     ) -> None:
         if api_keys:
             self.api_keys = api_keys
@@ -72,7 +73,7 @@ class NvidiaEmbedder(BaseEmbedder):
             
         self.current_key_idx = 0
         self._batch_size = batch_size
-        self._dim        = 1024
+        self._dim        = dim or settings.embedding_dim
 
         # Quick connectivity check
         self._ping()
@@ -88,12 +89,19 @@ class NvidiaEmbedder(BaseEmbedder):
         """Verify API key works with a single test embedding."""
         try:
             result = self._call_api(["ping"], input_type="passage")
-            assert len(result[0]) == self._dim
-            logger.info("NVIDIA API connectivity check passed.")
+            if not result or not result[0]:
+                raise ValueError("NVIDIA API returned an empty embedding response.")
+            actual_dim = len(result[0])
+            if actual_dim != self._dim:
+                raise ValueError(
+                    f"Dimension mismatch: API returned {actual_dim}-dim vector, "
+                    f"but expected {self._dim}-dim (configured in settings.embedding_dim)."
+                )
+            logger.info("NVIDIA API connectivity check passed (dim=%d).", actual_dim)
         except Exception as exc:
             raise RuntimeError(
                 f"NVIDIA NIM API connectivity check failed: {exc}\n"
-                "Check your NVIDIA_API_KEYS in .env"
+                "Check your NVIDIA_API_KEYS and model configuration in .env"
             )
 
     def _call_api(
